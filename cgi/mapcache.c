@@ -112,26 +112,26 @@ static mapcache_context_fcgi* fcgi_context_create()
   return ctx;
 }
 
-static void fcgi_write_response(mapcache_context_fcgi *ctx, mapcache_http_response *response)
+static void fcgi_write_response(mapcache_context_fcgi *ctx, mapcache_http_response *response, FCGX_Stream *out, char **envp)
 {
   if(response->code != 200) {
-    printf("Status: %ld %s\r\n",response->code, err_msg(response->code));
+      FCGX_FPrintF(out, "Status: %ld %s\r\n",response->code, err_msg(response->code));
   }
   if(response->headers && !apr_is_empty_table(response->headers)) {
     const apr_array_header_t *elts = apr_table_elts(response->headers);
     int i;
     for(i=0; i<elts->nelts; i++) {
       apr_table_entry_t entry = APR_ARRAY_IDX(elts,i,apr_table_entry_t);
-      printf("%s: %s\r\n", entry.key, entry.val);
+      FCGX_FPrintF(out, "%s: %s\r\n", entry.key, entry.val);
     }
   }
   if(response->mtime) {
     char *datestr;
-    char *if_modified_since = getenv("HTTP_IF_MODIFIED_SINCE");
+    char *if_modified_since = FCGX_GetParam("HTTP_IF_MODIFIED_SINCE", envp);
 
     datestr = apr_palloc(ctx->ctx.pool, APR_RFC822_DATE_LEN);
     apr_rfc822_date(datestr, response->mtime);
-    printf("Last-Modified: %s\r\n", datestr);
+    FCGX_FPrintF(out, "Last-Modified: %s\r\n", datestr);
 
     if(if_modified_since) {
       apr_time_t ims_time;
@@ -142,19 +142,19 @@ static void fcgi_write_response(mapcache_context_fcgi *ctx, mapcache_http_respon
       ims_time = apr_date_parse_http(if_modified_since);
       ims = apr_time_sec(ims_time);
       if(ims >= mtime) {
-        printf("Status: 304 Not Modified\r\n");
+          FCGX_FPrintF(out, "Status: 304 Not Modified\r\n");
 	/*
 	 * "The 304 response MUST NOT contain a message-body"
 	 * https://tools.ietf.org/html/rfc2616#section-10.3.5
 	 */
-	printf("\r\n");
+          FCGX_FPrintF(out, "\r\n");
 	return;
       }
     }
   }
   if(response->data) {
-    printf("Content-Length: %ld\r\n\r\n", response->data->size);
-    fwrite((char*)response->data->buf, response->data->size,1,stdout);
+    FCGX_FPrintF(out, "Content-Length: %ld\r\n\r\n", response->data->size);
+    FCGX_PutStr((char*)response->data->buf, response->data->size, out);
   }
 }
 
@@ -274,37 +274,45 @@ int main(int argc, const char **argv)
 
 
 #ifdef USE_FASTCGI
-  while (FCGI_Accept() >= 0) {
+
+  char **envp;
+  FCGX_Stream *in, *out, *err;
+
+  in = FCGI_stdin->fcgx_stream;
+  out = FCGI_stdout->fcgx_stream;
+  err = FCGI_stderr->fcgx_stream;
+
+  while (FCGX_Accept(&in, &out, &err, &envp) >= 0) {
 #endif
 
     ctx->pool = config_pool;
     if(!ctx->config || ctx->config->autoreload) {
       load_config(ctx,conffile);
       if(GC_HAS_ERROR(ctx)) {
-        fcgi_write_response(globalctx, mapcache_core_respond_to_error(ctx));
+        fcgi_write_response(globalctx, mapcache_core_respond_to_error(ctx), out, envp);
         goto cleanup;
       }
     }
     apr_pool_create(&(ctx->pool),config_pool);
+
     request = NULL;
-    pathInfo = getenv("PATH_INFO");
+    pathInfo = FCGX_GetParam("PATH_INFO", envp);
 
-
-    params = mapcache_http_parse_param_string(ctx, getenv("QUERY_STRING"));
+    params = mapcache_http_parse_param_string(ctx, FCGX_GetParam("QUERY_STRING", envp));
     mapcache_service_dispatch_request(ctx,&request,pathInfo,params,ctx->config);
     if(GC_HAS_ERROR(ctx) || !request) {
-      fcgi_write_response(globalctx, mapcache_core_respond_to_error(ctx));
+      fcgi_write_response(globalctx, mapcache_core_respond_to_error(ctx), out, envp);
       goto cleanup;
     }
 
     http_response = NULL;
     if(request->type == MAPCACHE_REQUEST_GET_CAPABILITIES) {
       mapcache_request_get_capabilities *req = (mapcache_request_get_capabilities*)request;
-      char *host = getenv("SERVER_NAME");
-      char *port = getenv("SERVER_PORT");
+      char *host = FCGX_GetParam("SERVER_NAME", envp);
+      char *port = FCGX_GetParam("SERVER_PORT", envp);
       char *fullhost;
       char *url;
-      if(getenv("HTTPS")) {
+      if(FCGX_GetParam("HTTPS", envp)) {
         if(!port || !strcmp(port,"443")) {
           fullhost = apr_psprintf(ctx->pool,"https://%s",host);
         } else {
@@ -319,7 +327,7 @@ int main(int argc, const char **argv)
       }
       url = apr_psprintf(ctx->pool,"%s%s/",
                          fullhost,
-                         getenv("SCRIPT_NAME")
+                         FCGX_GetParam("SCRIPT_NAME", envp)
                         );
       http_response = mapcache_core_get_capabilities(ctx,request->service,req,url,pathInfo,ctx->config);
     } else if( request->type == MAPCACHE_REQUEST_GET_TILE) {
@@ -340,17 +348,17 @@ int main(int argc, const char **argv)
 #endif
     }
     if(GC_HAS_ERROR(ctx)) {
-      fcgi_write_response(globalctx, mapcache_core_respond_to_error(ctx));
+      fcgi_write_response(globalctx, mapcache_core_respond_to_error(ctx), out, envp);
       goto cleanup;
     }
 #ifdef DEBUG
     if(!http_response) {
       ctx->set_error(ctx,500,"###BUG### NULL response");
-      fcgi_write_response(globalctx, mapcache_core_respond_to_error(ctx));
+      fcgi_write_response(globalctx, mapcache_core_respond_to_error(ctx), out, envp);
       goto cleanup;
     }
 #endif
-    fcgi_write_response(globalctx,http_response);
+    fcgi_write_response(globalctx,http_response, out, envp);
 cleanup:
 #ifdef USE_FASTCGI
     apr_pool_destroy(ctx->pool);
