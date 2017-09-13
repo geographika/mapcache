@@ -35,6 +35,19 @@ if (APPLE)
   set(CMAKE_FIND_FRAMEWORK "LAST")
 endif (APPLE)
 
+if(WIN32)
+  set(REGEX_SOURCES ${REGEX_DIR}/regex.c)
+  include_directories(${REGEX_DIR})
+  add_definitions(-DREGEX_MALLOC -DUSE_GENERIC_MS_NINT -DHAVE_STRING_H)
+  add_definitions(-D_CRT_SECURE_NO_DEPRECATE -D_CRT_NONSTDC_NO_DEPRECATE)
+  set(REGEX_MALLOC 1)
+  set(USE_GENERIC_MS_NINT 1)
+  set(HAVE_STRING_H 0)
+  message(STATUS "Windows - using ${REGEX_DIR}")  
+else(WIN32)
+  set(REGEX_SOURCES "")
+endif(WIN32)
+
 macro( report_optional_not_found component )
   message(SEND_ERROR "${component} library/component/dependency could not be found.
   HINTS:
