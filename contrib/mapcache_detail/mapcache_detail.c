@@ -995,12 +995,14 @@ int main(int argc, char * argv[])
       || (region_bbox.maxy > grid->extent.maxy))
   {
 #endif // USE_CLIPPERS
-    ctx.set_error(&ctx, 500,
-        "Requested geometry [ %.18g, %.18g, %.18g, %.18g ] is not contained within Grid extent: "
-        "[ %.18g, %.18g, %.18g, %.18g ]\n", 
-		region_bbox.minx, region_bbox.miny, region_bbox.maxx, region_bbox.maxy,
-		grid->extent.minx, grid->extent.miny, grid->extent.maxx, grid->extent.maxy);
-    goto failure;
+	{
+      ctx.set_error(&ctx, 500,
+          "Requested geometry [ %.18g, %.18g, %.18g, %.18g ] is not contained within Grid extent: "
+          "[ %.18g, %.18g, %.18g, %.18g ]\n", 
+	  	region_bbox.minx, region_bbox.miny, region_bbox.maxx, region_bbox.maxy,
+	  	grid->extent.minx, grid->extent.miny, grid->extent.maxx, grid->extent.maxy);
+      goto failure;
+	}
   }
 
 
